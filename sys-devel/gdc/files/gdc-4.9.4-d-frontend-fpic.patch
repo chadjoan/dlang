@@ -1,0 +1,34 @@
+diff --git a/gcc/d/Make-lang.in b/gcc/d/Make-lang.in
+index 64b3316..6a619be 100644
+--- a/gcc/d/Make-lang.in
++++ b/gcc/d/Make-lang.in
+@@ -36,6 +36,9 @@ d: cc1d$(exeext)
+ # Include the dfrontend and build directories for headers.
+ D_INCLUDES = -I$(srcdir)/d -I$(srcdir)/d/dfrontend -Id
+ 
++# Needed for hardened musl.
++D_CFLAGS = -fPIC $(D_INCLUDES)
++
+ # Create the compiler driver for D.
+ CFLAGS-d/d-spec.o += $(DRIVER_DEFINES) $(D_LIBPHOBOS)
+ 
+@@ -112,15 +115,15 @@ d/verstr.h: d/VERSION
+ 
+ # Override build rules for D frontend.
+ d/%.o: d/dfrontend/%.c $(D_GENERATED_SRCS) d/verstr.h
+-	$(DMD_COMPILE) $(D_INCLUDES) $<
++	$(DMD_COMPILE) $(D_CFLAGS) $<
+ 	$(POSTCOMPILE)
+ 
+ d/%.dmdgen.o: $(srcdir)/d/dfrontend/%.c
+-	$(DMDGEN_COMPILE) $(D_INCLUDES) $<
++	$(DMDGEN_COMPILE) $(D_CFLAGS) $<
+ 	$(POSTCOMPILE)
+ 
+-CFLAGS-d/id.o += $(D_INCLUDES)
+-CFLAGS-d/impcnvtab.o += $(D_INCLUDES)
++CFLAGS-d/id.o += $(D_CFLAGS)
++CFLAGS-d/impcnvtab.o += $(D_CFLAGS)
+ 
+ # All language-specific object files for D.
+ D_ALL_OBJS = $(D_DMD_OBJS) $(D_GENERATED_OBJS) $(D_GLUE_OBJS)

@@ -1,0 +1,365 @@
+commit 82c18a5d7aa6a9d38353bb2b1e0848c33c654c10
+Author: Chad Joan <chadjoan@gmail.com>
+Date:   Sun Jun 4 21:32:15 2017 -0400
+
+    Add a D implementation of qsort_r to druntime.
+    
+    This is needed on musl libc systems, or any other libc alternative
+    that strictly follows standards, because qsort_r tends to be a
+    glibc specific function.
+    
+    This qsort_r implementation is a modification of the musl libc
+    qsort implementation to add the context parameter for the sort
+    predicate, as well as convert the C code to D code.
+
+diff --git a/libphobos/libdruntime/Makefile.am b/libphobos/libdruntime/Makefile.am
+index de473b1..42a9124 100644
+--- a/libphobos/libdruntime/Makefile.am
++++ b/libphobos/libdruntime/Makefile.am
+@@ -169,7 +169,7 @@ DRUNTIME_DSOURCES = core/atomic.d core/bitop.d core/checkedint.d \
+ 	rt/aApply.d rt/aApplyR.d rt/aaA.d rt/adi.d rt/arrayassign.d \
+ 	rt/arraycast.d rt/arraycat.d rt/cast_.d rt/config.d rt/critical_.d \
+ 	rt/deh.d rt/dmain2.d rt/invariant.d rt/lifetime.d rt/memory.d \
+-	rt/minfo.d rt/monitor_.d rt/obj.d rt/qsort.d rt/sections.d \
++	rt/minfo.d rt/monitor_.d rt/obj.d rt/qsort.d rt/qsort_impl.d rt/sections.d \
+ 	rt/sections_android.d rt/sections_elf_shared.d rt/sections_osx.d \
+ 	rt/sections_solaris.d rt/sections_win32.d rt/sections_win64.d \
+ 	rt/switch_.d rt/tlsgc.d rt/typeinfo/ti_AC.d rt/typeinfo/ti_Acdouble.d \
+diff --git a/libphobos/libdruntime/Makefile.in b/libphobos/libdruntime/Makefile.in
+index c8ff61f..313ad6e 100644
+--- a/libphobos/libdruntime/Makefile.in
++++ b/libphobos/libdruntime/Makefile.in
+@@ -161,7 +161,7 @@ am__objects_1 = core/atomic.lo core/bitop.lo core/checkedint.lo \
+ 	rt/aaA.lo rt/adi.lo rt/arrayassign.lo rt/arraycast.lo \
+ 	rt/arraycat.lo rt/cast_.lo rt/config.lo rt/critical_.lo \
+ 	rt/deh.lo rt/dmain2.lo rt/invariant.lo rt/lifetime.lo \
+-	rt/memory.lo rt/minfo.lo rt/monitor_.lo rt/obj.lo rt/qsort.lo \
++	rt/memory.lo rt/minfo.lo rt/monitor_.lo rt/obj.lo rt/qsort.lo rt/qsort_impl.lo \
+ 	rt/sections.lo rt/sections_android.lo \
+ 	rt/sections_elf_shared.lo rt/sections_osx.lo \
+ 	rt/sections_solaris.lo rt/sections_win32.lo \
+@@ -585,7 +585,7 @@ DRUNTIME_DSOURCES = core/atomic.d core/bitop.d core/checkedint.d \
+ 	rt/aApply.d rt/aApplyR.d rt/aaA.d rt/adi.d rt/arrayassign.d \
+ 	rt/arraycast.d rt/arraycat.d rt/cast_.d rt/config.d rt/critical_.d \
+ 	rt/deh.d rt/dmain2.d rt/invariant.d rt/lifetime.d rt/memory.d \
+-	rt/minfo.d rt/monitor_.d rt/obj.d rt/qsort.d rt/sections.d \
++	rt/minfo.d rt/monitor_.d rt/obj.d rt/qsort.d rt/qsort_impl.d rt/sections.d \
+ 	rt/sections_android.d rt/sections_elf_shared.d rt/sections_osx.d \
+ 	rt/sections_solaris.d rt/sections_win32.d rt/sections_win64.d \
+ 	rt/switch_.d rt/tlsgc.d rt/typeinfo/ti_AC.d rt/typeinfo/ti_Acdouble.d \
+@@ -844,6 +844,7 @@ rt/minfo.lo: rt/$(am__dirstamp)
+ rt/monitor_.lo: rt/$(am__dirstamp)
+ rt/obj.lo: rt/$(am__dirstamp)
+ rt/qsort.lo: rt/$(am__dirstamp)
++rt/qsort_impl.lo: rt/$(am__dirstamp)
+ rt/sections.lo: rt/$(am__dirstamp)
+ rt/sections_android.lo: rt/$(am__dirstamp)
+ rt/sections_elf_shared.lo: rt/$(am__dirstamp)
+@@ -1477,6 +1478,8 @@ mostlyclean-compile:
+ 	-rm -f rt/obj.lo
+ 	-rm -f rt/qsort.$(OBJEXT)
+ 	-rm -f rt/qsort.lo
++	-rm -f rt/qsort_impl.$(OBJEXT)
++	-rm -f rt/qsort_impl.lo
+ 	-rm -f rt/sections.$(OBJEXT)
+ 	-rm -f rt/sections.lo
+ 	-rm -f rt/sections_android.$(OBJEXT)
+diff --git a/libphobos/libdruntime/rt/qsort.d b/libphobos/libdruntime/rt/qsort.d
+index 986e393..a7f7f4c 100644
+--- a/libphobos/libdruntime/rt/qsort.d
++++ b/libphobos/libdruntime/rt/qsort.d
+@@ -18,10 +18,25 @@ module rt.qsort;
+ 
+ private import core.stdc.stdlib;
+ 
+-version (CRuntime_Glibc)
++version (linux)
+ {
+-    alias extern (C) int function(const void *, const void *, void *) Cmp;
+-    extern (C) void qsort_r(void *base, size_t nmemb, size_t size, Cmp cmp, void *arg);
++    // TODO: HACK: I can't figure out how to make the makefiles declare this
++    // TODO: HACK: parametric way, so the D-based qsort_r implementation is
++    // TODO: HACK: used unconditionally. -- Chad Joan  2017-06-04
++    //version (LIBC_MUSL)
++        // TODO: This should probably be the default: it is more likely to
++        // TODO: compile on systems with yet-unknown libc implementations,
++        // TODO: or in environments where it makes no sense to talk about
++        // TODO: libc (ex: JavaScript, C#, Haxe, etc).
++        public import rt.qsort_impl;
++    /+
++    else
++    {
++        // TODO: This should probably be in version(LIBC_GLIBC)
++        alias extern (C) int function(const void *, const void *, void *) Cmp;
++        extern (C) void qsort_r(void *base, size_t nmemb, size_t size, Cmp cmp, void *arg);
++    }
++    +/
+ 
+     extern (C) void[] _adSort(void[] a, TypeInfo ti)
+     {
+diff --git a/libphobos/libdruntime/rt/qsort_impl.d b/libphobos/libdruntime/rt/qsort_impl.d
+new file mode 100755
+index 0000000..0d17a7a
+--- /dev/null
++++ b/libphobos/libdruntime/rt/qsort_impl.d
+@@ -0,0 +1,259 @@
++/* Copyright (C) 2011 by Valentin Ochs
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to
++ * deal in the Software without restriction, including without limitation the
++ * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
++ * sell copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
++ * IN THE SOFTWARE.
++ */
++
++/* Minor changes by Rich Felker for integration in musl, 2011-04-27. */
++/* Port to D and conversion from qsort to qsort_r
++    by Chad Joan for integration in Phobos, 2017-05-10 */
++
++module rt.qsort_impl;
++
++import core.stdc.stdint;
++import core.stdc.stdlib;
++import core.stdc.string;
++
++//#include "atomic.h"
++private int a_ctz_64(uint64_t x)
++{
++    static const byte[64] debruijn64 = [
++        0, 1, 2, 53, 3, 7, 54, 27, 4, 38, 41, 8, 34, 55, 48, 28,
++        62, 5, 39, 46, 44, 42, 22, 9, 24, 35, 59, 56, 49, 18, 29, 11,
++        63, 52, 6, 26, 37, 40, 33, 47, 61, 45, 43, 21, 23, 58, 17, 10,
++        51, 25, 36, 32, 60, 20, 57, 16, 50, 31, 19, 15, 30, 14, 13, 12
++    ];
++    static const byte[32] debruijn32 = [
++        0, 1, 23, 2, 29, 24, 19, 3, 30, 27, 25, 11, 20, 8, 4, 13,
++        31, 22, 28, 18, 26, 10, 7, 12, 21, 17, 9, 6, 16, 5, 15, 14
++    ];
++    static if (size_t.sizeof < 8) {
++        uint32_t y = x;
++        if (!y) {
++            y = x>>32;
++            return 32 + debruijn32[(y&-y)*0x076be629 >> 27];
++        }
++        return debruijn32[(y&-y)*0x076be629 >> 27];
++    }
++    else
++        return debruijn64[(x&-x)*0x022fdd63cc95386dUL >> 58];
++}
++
++private int a_ctz_l(size_t x)
++{
++    static const byte[32] debruijn32 = [
++        0, 1, 23, 2, 29, 24, 19, 3, 30, 27, 25, 11, 20, 8, 4, 13,
++        31, 22, 28, 18, 26, 10, 7, 12, 21, 17, 9, 6, 16, 5, 15, 14
++    ];
++    static if (size_t.sizeof == 8)
++        return a_ctz_64(x);
++    else
++        return debruijn32[(x&-x)*0x076be629 >> 27];
++}
++//#define ntz(x) a_ctz_l((x))
++alias ntz = a_ctz_l;
++
++alias extern (C) int function(const void*, const void*, void *) cmpfun;
++
++private int pntz(in size_t[2] p) {
++	const int sizeof_size_t = size_t.sizeof;
++    int r = ntz(p[0] - 1);
++    if(r != 0 || (r = 8*sizeof_size_t + ntz(p[1])) != 8*sizeof_size_t) {
++        return r;
++    }
++    return 0;
++}
++
++private void cycle(size_t width, ubyte*[] ar, int n)
++{
++    ubyte[256] tmp;
++    size_t l;
++    int i;
++
++    if(n < 2) {
++        return;
++    }
++
++    ar[n] = tmp.ptr;
++    while(width) {
++        l = tmp.length < width ? tmp.length : width;
++        memcpy(ar[n], ar[0], l);
++        for(i = 0; i < n; i++) {
++            memcpy(ar[i], ar[i + 1], l);
++            ar[i] += l;
++        }
++        width -= l;
++    }
++}
++
++/* shl() and shr() need n > 0 */
++private void shl(ref size_t[2] p, int n)
++{
++    if(n >= 8 * size_t.sizeof) {
++        n -= 8 * size_t.sizeof;
++        p[1] = p[0];
++        p[0] = 0;
++    }
++    p[1] <<= n;
++    p[1] |= p[0] >> (size_t.sizeof * 8 - n);
++    p[0] <<= n;
++}
++
++private void shr(ref size_t[2] p, int n)
++{
++    if(n >= 8 * size_t.sizeof) {
++        n -= 8 * size_t.sizeof;
++        p[0] = p[1];
++        p[1] = 0;
++    }
++    p[0] >>= n;
++    p[0] |= p[1] << (size_t.sizeof * 8 - n);
++    p[1] >>= n;
++}
++
++private void sift(ubyte* head, size_t width, cmpfun cmp, int pshift, in size_t[] lp, void* context)
++{
++    ubyte* rt, lf;
++    ubyte*[14 * size_t.sizeof + 1] ar;
++    int i = 1;
++
++    ar[0] = head;
++    while(pshift > 1) {
++        rt = head - width;
++        lf = head - width - lp[pshift - 2];
++
++        if(cmp(ar[0], lf, context) >= 0 && cmp(ar[0], rt, context) >= 0) {
++            break;
++        }
++        if(cmp(lf, rt, context) >= 0) {
++            ar[i++] = lf;
++            head = lf;
++            pshift -= 1;
++        } else {
++            ar[i++] = rt;
++            head = rt;
++            pshift -= 2;
++        }
++    }
++    cycle(width, ar, i);
++}
++
++private void trinkle(
++    ubyte* head, size_t width, cmpfun cmp,
++    in size_t[2] pp, int pshift, int trusty, in size_t[] lp,
++    void* context)
++{
++    ubyte* stepson, rt, lf;
++    size_t[2] p;
++    ubyte*[14 * size_t.sizeof + 1] ar;
++    int i = 1;
++    int trail;
++
++    p[0] = pp[0];
++    p[1] = pp[1];
++
++    ar[0] = head;
++    while(p[0] != 1 || p[1] != 0) {
++        stepson = head - lp[pshift];
++        if(cmp(stepson, ar[0], context) <= 0) {
++            break;
++        }
++        if(!trusty && pshift > 1) {
++            rt = head - width;
++            lf = head - width - lp[pshift - 2];
++            if(cmp(rt, stepson, context) >= 0 || cmp(lf, stepson, context) >= 0) {
++                break;
++            }
++        }
++
++        ar[i++] = stepson;
++        head = stepson;
++        trail = pntz(p);
++        shr(p, trail);
++        pshift += trail;
++        trusty = 0;
++    }
++    if(!trusty) {
++        cycle(width, ar, i);
++        sift(head, width, cmp, pshift, lp, context);
++    }
++}
++
++public void qsort_r(void *base, size_t nel, size_t width, cmpfun cmp, void* context)
++{
++    size_t[12*size_t.sizeof] lp;
++    size_t i, size = width * nel;
++    ubyte* head, high;
++    size_t[2] p = [1, 0];
++    int pshift = 1;
++    int trail;
++
++    if (!size) return;
++
++    head = cast(ubyte*)base;
++    high = head + size - width;
++
++    /* Precompute Leonardo numbers, scaled by element width */
++    lp[0]=lp[1]=width;
++    for(i=2; (lp[i]=lp[i-2]+lp[i-1]+width) < size; i++) {}
++
++    while(head < high) {
++        if((p[0] & 3) == 3) {
++            sift(head, width, cmp, pshift, lp, context);
++            shr(p, 2);
++            pshift += 2;
++        } else {
++            if(lp[pshift - 1] >= high - head) {
++                trinkle(head, width, cmp, p, pshift, 0, lp, context);
++            } else {
++                sift(head, width, cmp, pshift, lp, context);
++            }
++
++            if(pshift == 1) {
++                shl(p, 1);
++                pshift = 0;
++            } else {
++                shl(p, pshift - 1);
++                pshift = 1;
++            }
++        }
++
++        p[0] |= 1;
++        head += width;
++    }
++
++    trinkle(head, width, cmp, p, pshift, 0, lp, context);
++
++    while(pshift != 1 || p[0] != 1 || p[1] != 0) {
++        if(pshift <= 1) {
++            trail = pntz(p);
++            shr(p, trail);
++            pshift += trail;
++        } else {
++            shl(p, 2);
++            pshift -= 2;
++            p[0] ^= 7;
++            shr(p, 1);
++            trinkle(head - lp[pshift] - width, width, cmp, p, pshift + 1, 1, lp, context);
++            shl(p, 1);
++            p[0] |= 1;
++            trinkle(head - width, width, cmp, p, pshift, 1, lp, context);
++        }
++        head -= width;
++    }
++}
+\ No newline at end of file
